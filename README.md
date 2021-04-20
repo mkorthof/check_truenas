@@ -27,7 +27,7 @@ For absolute values: '-C' and '-W'.
 
 To skip a check set 0: `-w 0` `-c 0` and/or `-W 0` `-C 0`
 
-You can also vars in script instead:
+You can also use vars in script instead:
 
 ```
 P_WARN="85"
@@ -54,8 +54,8 @@ USAGE: ./check_truenas.sh -A agent -S community -m file.mib -Z zpool -D dataset
 OPTIONS: -A Agent host/ip
          -S communityString
          -m MIB file
-         -Z Check Zpool health/usage
-         -D Check Dataset usage
+         -Z check Zpool health/usage
+         -D check Dataset usage
          -M Mode: 'health' or 'usage'
          -w warning <n> -c critical <n> where n is max % usage
          -W Warning <n> -c Critical <n> where n is max abs usage
