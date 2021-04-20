@@ -1,0 +1,200 @@
+#!/bin/sh
+
+# SNMP Examples:
+#################
+
+# - snmpwalk -v2c -c public 10.1.1.2 -m /usr/share/snmp/mibs/FREENAS-MIB.txt SNMPv2-SMI::enterprises.50536
+# - snmpwalk -v2c -c public 10.1.1.2 -m /usr/share/snmp/mibs/FREENAS-MIB.txt zpoolDescr
+#     zpoolDescr.1 = STRING: boot-pool
+#     zpoolDescr.2 = STRING: tank
+# - snmpwalk -v2c -c public 10.1.1.2 -m /usr/share/snmp/mibs/FREENAS-MIB.txt datasetDesc
+#     datasetDescr.30 = STRING: tank/vol
+#     datasetDescr.55 = STRING: zdata02/vol2
+
+# Default values:
+##################
+
+COMMUNITY="public"
+AGENT="10.1.1.2"
+MIB="/usr/share/snmp/mibs/FREENAS-MIB.txt"
+ZPOOL="tank"
+DATASET="vol"
+P_WARN="85"
+P_CRIT="95"
+A_WARN="100000000"
+A_CRIT="50000000"
+MODE="health"
+
+SCRIPT="$( basename "$0" )"
+
+# Handle arguments
+###################
+
+while getopts ":A:S:m:D:Z:w:c:W:C:M:h" opt; do
+  case $opt in
+    A) AGENT="$OPTARG" ;;
+    S) COMMUNITY="$OPTARG" ;;
+    m) MIB="$OPTARG" ;;
+    D) DATASET="$OPTARG" ;;
+    Z) ZPOOL="$OPTARG" ;;
+    M) MODE="$OPTARG" ;;
+    w) P_WARN="$OPTARG" ;;
+    c) P_CRIT="$OPTARG" ;;
+    W) A_WARN="$OPTARG" ;;
+    C) A_CRIT="$OPTARG" ;;
+    h)
+      printf "\nUSAGE: ./%s  -A agent -S community -m file.mib -Z zpool -D dataset\\n" "$SCRIPT"
+      printf "\t\t\t-M <health|usage> -w 85 -c 95 -W 1000 -C 500\\n\\n"
+      printf "OPTIONS: -A Agent host/ip\\n"
+      printf "\t -S communityString\\n"
+      printf "\t -m MIB file\\n"
+      printf "\t -Z check Zpool health/usage\\n"
+      printf "\t -D check Dataset usage\\n"
+      printf "\t -M Mode 'health' or 'usage'\\n"
+      printf "\t -w warning <n> -c critical <n> where n is max %% usage\\n"
+      printf "\t -W Warning <n> -c Critical <n> where n is max abs usage\\n\\n"
+      exit 0
+      ;;
+    : )
+      echo "Invalid option: $OPTARG requires an argument" 1>&2
+      exit 1
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG" >&2
+      exit 1
+      ;;
+  esac
+done
+if [ -z "$1" ] || [ $OPTIND -le 3 ]; then
+  printf "Missing arguments, for help try: ./%s -h\\n" "$SCRIPT"
+  exit 1
+fi
+shift $((OPTIND -1))
+SNMP_ARGS="-v2c -c $COMMUNITY $AGENT -m $MIB -t 5"
+
+# Function: get index, args: $1=String $2=Object-Type
+func_idx() {
+  snmpwalk $SNMP_ARGS "$2" | \grep -E -m 1 "${1}$" | sed "s/.*${2}\.\([0-9]\+\).*/\1/"
+}
+
+# Function: get oid value, args: $1=OID.Index
+func_oid() {
+  snmpget $SNMP_ARGS "$1"
+}
+
+# Function: format variable, args: $1=OID Value (int)
+func_fmt_var() {
+  sed -e 's/.*INTEGER: \([0-9]\+\)\( Bytes\)\{0,1\}/\1/'
+}
+
+# Function: convert bytes to GiB/TiB, args: $1=Bytes
+func_conv_bytes() {
+  GiB=1073741824
+  TiB=1099511627776
+  if [ "$1" -lt "$TiB" ]; then
+    echo "$1 $GiB" | awk '{  printf "%0.0f GiB", $1 / $2 }'
+  elif [ "$1" -gt "$GiB" ]; then
+    echo "$1 $TiB" | awk '{  printf "%0.2f TiB", $1 / $2 }'
+  fi
+}
+
+# Function: calc size in Bytes, args: $1=OID.Index $2=allocationUnits
+func_get_size() {
+  func_oid "$1" | func_fmt_var | awk -v units="$2" '{ printf "%s", $1 * units }'
+}
+
+# Check zpool health
+#####################
+if [ "$MODE" = "health" ]; then
+  idx="$( func_idx "$ZPOOL" "zpoolDescr" )"
+  health="$( func_oid "zpoolHealth.${idx}" | sed -e 's/.*INTEGER: \([a-z0-9()]\+\)/\1/' )"
+  if echo "$health" | \grep -q "online"; then
+    echo "HEALTH OK - $health"
+    exit 0
+  fi
+  if [ -z "$health" ]; then
+    health="Not found"
+  fi
+  echo "HEALTH CRITICAL - $health"
+  exit 2
+fi
+
+# Check disk space usage
+#########################
+if [ "$MODE" = "usage" ]; then
+  msg=""
+  zp_idx="$( func_idx "$ZPOOL" "zpoolDescr" )"
+  ds_idx="$( func_idx "${ZPOOL}/${DATASET}" "datasetDescr" )"
+  if echo "$zp_idx" | \grep -Eq "^[0-9]+$" && echo "$ds_idx" | \grep -Eq "^[0-9]+$"; then
+    zp_usage_result=""
+    ds_avail_result=""
+    ds_total_result=""
+    # zpool percent usage
+    ######################
+    zp_used_pct=0
+    zp_units="$( func_oid "zpoolAllocationUnits.${zp_idx}" | func_fmt_var )"
+    zp_avail_units="$( func_get_size "zpoolAvailable.${zp_idx}" "$zp_units" )"
+    zp_used_units="$( func_get_size "zpoolUsed.${zp_idx}" "$zp_units" )"
+    zp_size_units="$( func_get_size "zpoolSize.${zp_idx}" "$zp_units" )"
+    if echo "$zp_size_units" | grep -Eq "^[0-9]+$" && echo "$zp_size_units" | grep -Eq "^[0-9]+$"; then
+      zp_used_pct="$( echo "100 $zp_used_units $zp_size_units" | awk '{ printf "%0.0f", $1 * $2 / $3 }' )"
+      zp_usage_result=" (${zp_used_pct}%)"
+    fi
+    # 'zpool/dataset' absolute free space
+    ####################################
+    ds_units="$( func_oid "datasetAllocationUnits.${ds_idx}" | func_fmt_var )"
+    ds_avail_units="$( func_get_size "datasetAvailable.${ds_idx}" "$ds_units" )"
+    if echo "$ds_avail_units" | grep -Eq "^[0-9]+$"; then
+      ds_avail_result="$(func_conv_bytes "$ds_avail_units") available"
+    fi
+    # ds totals without children
+    #############################
+    ds_used_total=0
+    for i in $( snmpwalk $SNMP_ARGS "datasetDesc" | \grep -E "$ZPOOL" | \
+      grep -e '^[^/]*/[^/]*$' | sed "s/.*${2}\.\([0-9]\+\).*/\1/" )
+    do
+      if echo "$i" | \grep -Eq "^[0-9]+$"; then
+        ds_units="$( func_oid "datasetAllocationUnits.${i}" | func_fmt_var )"
+        ds_used_units="$( func_get_size "datasetUsed.${i}" "$ds_units" )"
+        ds_used_total=$((ds_used_total+ds_used_units))
+      fi
+    done    
+    if echo "$ds_used_units" | grep -Eq "^[0-9]+$"; then
+      ds_total_result=" $(func_conv_bytes "$ds_used_total") used"
+    fi
+    msg="${ds_avail_result}${ds_total_result}${zp_usage_result}"
+
+    # pct usage notification
+    #########################
+    if echo "$P_CRIT" | grep -Eq "^[0-9]{1,2}$" && echo "$P_CRIT" | grep -Eq "^[0-9]{1,2}$"; then
+      if [ "$P_CRIT" -gt 0 ] && [ "$zp_used_pct" -gt "$P_CRIT" ]; then
+        echo "USAGE CRITICAL - $msg"
+        exit 1
+      fi
+      if [ "$P_WARN" -gt 0 ] && [ "$zp_used_pct" -gt "$P_WARN" ]; then
+        echo "USAGE WARNING - $msg"
+        exit 2
+      fi
+    fi
+    # abs usage notification
+    #########################
+    if echo "$A_CRIT" | grep -Eq "^[0-9]+$" && echo "$A_WARN" | grep -Eq "^[0-9]+$"; then
+      if [ "$A_WARN" -gt 0 ] && [ "$zp_avail_units" -lt "$((A_WARN*zp_units))" ]; then
+        echo "USAGE WARNING - $msg"
+        exit 2
+      fi
+      if [ "$A_CRIT" -gt 0 ] && [ "$zp_avail_units" -lt "$((A_CRIT*zp_units))" ]; then
+        echo "USAGE CRITICAL - $msg"
+        exit 1
+      fi
+    fi
+
+  else
+    echo "CRITICAL - zpool/dataset not found"
+    exit 2
+  fi
+  echo "USAGE OK - $msg" 
+  exit 0
+fi
+echo "UNKNOWN - $MODE zpool/dataset $ZPOOL $DATASET"
+exit 3
