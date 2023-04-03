@@ -70,11 +70,11 @@ if [ -z "$1" ] || [ $OPTIND -le 3 ]; then
   exit 1
 fi
 shift $((OPTIND -1))
-SNMP_ARGS="-v2c -c $COMMUNITY $AGENT -m $MIB -t 5"
+SNMP_ARGS="-v2c -c $COMMUNITY -m $MIB -t 5 $AGENT"
 
 # Function: get index, args: $1=String $2=Object-Type
 func_idx() {
-  snmpwalk $SNMP_ARGS "$2" | \grep -E -m 1 "${1}$" | sed "s/.*${2}\.\([0-9]\+\).*/\1/"
+  snmpwalk $SNMP_ARGS "$2" | \grep -E -m 1 "${1}$" | sed "s/.*${2}\.\([0-9]\{1,\}\).*/\1/"
 }
 
 # Function: get oid value, args: $1=OID.Index
@@ -84,7 +84,7 @@ func_oid() {
 
 # Function: format variable, args: $1=OID Value (int)
 func_fmt_var() {
-  sed -e 's/.*INTEGER: \([0-9]\+\)\( Bytes\)\{0,1\}/\1/'
+  sed -e 's/.*INTEGER: \([0-9]\{1,\}\)\( Bytes\)\{0,1\}/\1/'
 }
 
 # Function: convert bytes to GiB/TiB, args: $1=Bytes
@@ -107,7 +107,7 @@ func_get_size() {
 #####################
 if [ "$MODE" = "health" ]; then
   idx="$( func_idx "$ZPOOL" "zpoolDescr" )"
-  health="$( func_oid "zpoolHealth.${idx}" | sed -e 's/.*INTEGER: \([a-z0-9()]\+\)/\1/' )"
+  health="$( func_oid "zpoolHealth.${idx}" | sed -e 's/.*INTEGER: \([a-z0-9()]\{1,\}\)/\1/' )"
   if echo "$health" | \grep -q "online"; then
     echo "HEALTH OK - $health"
     exit 0
@@ -141,7 +141,7 @@ if [ "$MODE" = "usage" ]; then
       zp_usage_result=" (${zp_used_pct}%)"
     fi
     # 'zpool/dataset' absolute free space
-    ####################################
+    ######################################
     ds_units="$( func_oid "datasetAllocationUnits.${ds_idx}" | func_fmt_var )"
     ds_avail_units="$( func_get_size "datasetAvailable.${ds_idx}" "$ds_units" )"
     if echo "$ds_avail_units" | grep -Eq "^[0-9]+$"; then
@@ -151,7 +151,7 @@ if [ "$MODE" = "usage" ]; then
     #############################
     ds_used_total=0
     for i in $( snmpwalk $SNMP_ARGS "datasetDesc" | \grep -E "$ZPOOL" | \
-      grep -e '^[^/]*/[^/]*$' | sed "s/.*${2}\.\([0-9]\+\).*/\1/" )
+      grep -e '^[^/]*/[^/]*$' | sed "s/.*${2}\.\([0-9]\{1,\}\).*/\1/" )
     do
       if echo "$i" | \grep -Eq "^[0-9]+$"; then
         ds_units="$( func_oid "datasetAllocationUnits.${i}" | func_fmt_var )"
