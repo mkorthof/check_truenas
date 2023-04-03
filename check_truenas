@@ -136,7 +136,7 @@ if [ "$MODE" = "usage" ]; then
     zp_avail_units="$( func_get_size "zpoolAvailable.${zp_idx}" "$zp_units" )"
     zp_used_units="$( func_get_size "zpoolUsed.${zp_idx}" "$zp_units" )"
     zp_size_units="$( func_get_size "zpoolSize.${zp_idx}" "$zp_units" )"
-    if echo "$zp_size_units" | grep -Eq "^[0-9]+$" && echo "$zp_size_units" | grep -Eq "^[0-9]+$"; then
+    if echo "$zp_used_units" | grep -Eq "^[0-9]+$" && echo "$zp_size_units" | grep -Eq "^[0-9]+$"; then
       zp_used_pct="$( echo "100 $zp_used_units $zp_size_units" | awk '{ printf "%0.0f", $1 * $2 / $3 }' )"
       zp_usage_result=" (${zp_used_pct}%)"
     fi
