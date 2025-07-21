@@ -12,7 +12,7 @@ The check is meant to be used with multiple service defines in a nagios host cfg
 See Example below.
 Options can also be set as variables in the script itself (instead of using args).
 
-Tested with TrueNAS CORE 12.0 U2 and 13.0-U4
+Tested with TrueNAS CORE 12.0 U2 and 13.0-U4, should work with zVault (untested)
 
 ## Requirements
 
